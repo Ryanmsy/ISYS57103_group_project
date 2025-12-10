@@ -1,23 +1,22 @@
 import pandas as pd
 import numpy as np
-
+import pickle
 from typing import List, Dict, Any
-
+import sqlite3
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.svm import LinearSVC
 from sklearn.metrics import accuracy_score, f1_score
 import os
 
-
-
 class SVMSentimentModel:
     """
     OOP Sentiment Model using TF-IDF + Linear SVM.
     """
 
-    def __init__(self, filepath: str):
-        self.filepath = filepath
+    def __init__(self, db_filepath: str):
+        # FIX 1: Ensure the attribute name matches what we use later (db_filepath)
+        self.db_filepath = db_filepath
         self.df = None
         self.vectorizer = None
         self.model = None
@@ -28,55 +27,65 @@ class SVMSentimentModel:
         self.y_train = None
         self.y_test = None
 
+    def save_model(self, filename="svm_model.pkl"):
+        # FIX 2: Fixed typo 'dum' -> 'dump'
+        with open(filename, 'wb') as f:
+            pickle.dump((self.vectorizer, self.model), f)
+            print("Save_model worked")
 
-    # Load Dataset from Excel
-    def load_dataset_from_excel(self):
+    def load_model(self, filename="svm_model.pkl"):
+        with open(filename, 'rb') as f:
+            self.vectorizer, self.model = pickle.load(f)
+            print("load_model worked")
+
+    def load_dataset_from_db(self, table_name: str = "reviews"):
         """
-        Load Excel file with columns: 'rating' and 'text'
+        Connects to SQLite database and executes a SQL query to fetch data.
         """
+        if not os.path.exists(self.db_filepath):
+             raise FileNotFoundError(f"Database file not found at {self.db_filepath}. Did you run database_sentimentanalysis.py?")
 
         try:
-            print("Loading Excel file...")
+            print(f"Connecting to Data Warehouse: {self.db_filepath}...")
+            conn = sqlite3.connect(self.db_filepath)
+            
+            query = f"""
+                SELECT text, rating 
+                FROM {table_name} 
+                WHERE text IS NOT NULL
+            """
 
-            self.df = pd.read_excel(self.filepath)
-
-            # Make sure required columns exist
+            self.df = pd.read_sql(query, conn)
+            conn.close()
+            
             required_cols = {"rating", "text"}
             if not required_cols.issubset(self.df.columns):
-                raise ValueError(f"Excel file must contain {required_cols}")
+                raise ValueError(f"Database table must contain {required_cols}")
 
         except Exception as e:
-            raise RuntimeError(f"Failed to load Excel file: {e}")
+            raise RuntimeError(f"Failed to load data: {e}")
 
         print("Dataset loaded successfully.")
         print(self.df.head())
         return self.df
 
-
-    # Cleaning
     def cleaning(self):
         if self.df is None:
             raise ValueError("Dataset must be loaded before cleaning.")
 
         try:
-            # remove rows without text
             before = len(self.df)
             self.df = self.df.dropna(subset=['text'])
             self.df = self.df[self.df['text'].apply(lambda x: isinstance(x, str))]
-            after = len(self.df)
-
-            print(f"Removed {before - after} bad rows.")
-
+            
             # create binary labels: negative (0), positive (1)
             self.df['label'] = self.df['rating'].apply(
                 lambda x: 0 if x <= 2 else (1 if x >= 4 else None)
             )
 
-            # remove rating==3 neutral rows
-            before = len(self.df)
             self.df = self.df.dropna(subset=['label'])
             after = len(self.df)
-            print(f"Removed {before - after} neutral rows (rating = 3).")
+            print(f"Removed {before - after} rows (bad text or neutral rating).")
 
             self.df['label'] = self.df['label'].astype(int)
 
@@ -84,10 +93,7 @@ class SVMSentimentModel:
             raise RuntimeError(f"Cleaning failed: {e}")
 
         print("Cleaning complete.")
-        print(self.df.head())
 
-
-    # Split Data
     def split_data(self, test_size=0.2):
         if self.df is None:
             raise ValueError("Dataset must be cleaned before splitting.")
@@ -105,8 +111,6 @@ class SVMSentimentModel:
 
         print("Dataset split completed.")
 
-
-    # Vectorize
     def vectorization(self):
         if self.X_train is None:
             raise ValueError("You must split data before vectorizing.")
@@ -126,8 +130,6 @@ class SVMSentimentModel:
 
         print("Vectorization complete.")
 
-
-    # Train SVM Model
     def train(self):
         if self.vectorizer is None:
             raise ValueError("Vectorizer must be fitted before training.")
@@ -142,8 +144,6 @@ class SVMSentimentModel:
 
         print("Training complete.")
 
-
-    # Evaluate
     def evaluate(self):
         if self.model is None:
             raise ValueError("Model must be trained before evaluation.")
@@ -158,11 +158,8 @@ class SVMSentimentModel:
 
         print(f"Accuracy: {accuracy:.4f}")
         print(f"F1 Score: {f1:.4f}")
-
         return {"accuracy": accuracy, "f1": f1}
 
-
-    # Predict
     def predict(self, text: str):
         if self.model is None:
             raise ValueError("Model must be trained before prediction.")
@@ -175,19 +172,26 @@ class SVMSentimentModel:
         except Exception as e:
             raise RuntimeError(f"Prediction failed: {e}")
 
+# FIX 3: Wrap execution code so it doesn't run when imported by app.py
+if __name__ == "__main__":
+    # 1. Define DB path
+    db_path = "corporate_data_warehouse.db"
 
-# RUN MODEL USING EXCEL FILE
-model = SVMSentimentModel(
-    filepath = os.path.join( "amazon_test_2500.xlsx")
+    # 2. Check if DB exists
+    if not os.path.exists(db_path):
+        print("⚠️ WARNING: Database not found. Please run 'database_sentimentanalysis.py' first.")
+    else:
+        # 3. Instantiate and Run
+        # FIX 4: Use the correct parameter name (db_filepath)
+        model = SVMSentimentModel(db_filepath=db_path) 
+        
+        model.load_dataset_from_db() 
+        model.cleaning()
+        model.split_data()
+        model.vectorization()
+        model.train()
+        model.evaluate()
+        model.save_model() # Save the model so app.py can find it
 
-)
-
-model.load_dataset_from_excel()
-model.cleaning()
-model.split_data()
-model.vectorization()
-model.train()
-model.evaluate()
-
-print(model.predict("This product was amazing!"))
-print(model.predict("Terrible, very disappointed."))
+        print("\n--- Inference Tests ---")
+        print(f"Input: 'This product was amazing!' -> Prediction: {model.predict('This product was amazing!')}")
